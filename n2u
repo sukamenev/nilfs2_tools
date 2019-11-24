@@ -26,7 +26,7 @@ if ($ARGV[0] eq '-h' || $ARGV[0] eq '--help')
   print "This script return history of file item on NILFS2 filesystem.\n";
   print "Copy script to /usr/local/bin.\n";
   print "USAGE: n2u filename.\n";
-  print "NOTE: You need root privelegies and installed nilfs2 utilities.";
+  print "NOTE: You need root privilegies and installed nilfs2 utilities.\n";
   exit 0;
 }
 
