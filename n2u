@@ -1,0 +1,373 @@
+#!/usr/bin/perl -w
+
+# This script return history of file item on NILFS2 filesystem. 
+
+use Data::Dumper;
+$Data::Dumper::Sortkeys = 1;
+
+# For rel file path to abs path
+use File::Spec;
+
+# To convert from timestamp
+use Date::Format;
+
+$cChcp = '/usr/bin/chcp';
+$cLscp = '/usr/bin/lscp';
+$nMaxArgs = 50;
+
+if (!exists($ARGV[0]))
+{
+  print "Need file/dir name as argument!\n";
+  exit 7;
+}
+
+if ($ARGV[0] eq '-h' || $ARGV[0] eq '--help')
+{
+  print "This script return history of file item on NILFS2 filesystem.\n";
+  print "Copy script to /usr/local/bin.\n";
+  print "USAGE: n2u filename.\n";
+  print "NOTE: You need root privelegies and installed nilfs2 utilities.";
+  exit 0;
+}
+
+if ($> != 0)
+{
+  print "You need root privelegies!\n";
+  exit 8;
+}
+
+$sFileName = File::Spec->rel2abs( $ARGV[0] );
+
+$cmd = "cat /proc/mounts | awk '{if (\$3==\"nilfs2\") print length(\$2) \" \" \$2 \" \" \$1}' | sort -r -n | cut -d ' ' -f 2-3";
+
+@output = `$cmd`;
+
+if (0 == scalar @output)
+{
+  print "You don't have mounted NILFS2 filesystem!\n";
+  exit 1;
+}
+
+chomp @output;
+
+my $sDevice = my $sMount = "";
+
+foreach (@output)
+{
+  #print "$_";
+  ($sMount, $sDevice) = split(/\s/, $_);
+  if (index($sFileName, $sMount) == 0)
+  {
+    last;
+  }
+}
+
+if ($sMount eq "")
+{
+  print "Your file is not on NILFS2 filesystem!\n";
+  exit 2;
+}
+
+# Get relative filename
+$sRelFileName = substr($sFileName, length($sMount));
+
+if (length($sRelFileName)==1)
+{
+  print "You don't specify concrete file!\n";
+  exit 3;
+}
+
+# Get snapshot list
+$cmd = "$cLscp -s $sDevice | tail -n +2 | awk '{print \$1}'";
+@snapshot = `$cmd`;
+chomp @snapshot;
+
+if (0 < scalar @snapshot)
+{
+  print "Existing snapshots: ";
+  foreach (@snapshot)
+  {
+    print $_.", ";
+  }
+  print "\n";
+}
+
+#print Dumper(\@snapshot);
+#exit 0;
+
+# Set all checkpoint to snapshot
+# head -n -1 - Latest block is slow down work
+$cmd = "$cLscp $sDevice | tail -n +2 | head -n -1 | awk '{print \$1}'| xargs -n$nMaxArgs $cChcp ss ";
+
+`$cmd`;
+
+# Set all spapshot to checkpoint
+# lscp -s |  tail -n +2 | awk '{print $1}'| xargs -n50 chcp cp ";
+
+# Get snapshot list
+$cmd = "$cLscp -s $sDevice | tail -n +2 | awk '{print \$1}'";
+
+@output = `$cmd`;
+
+if (0 == scalar @output)
+{
+  print "You don't have checkpoint and snapshots!\n";
+  exit 4;
+}
+
+chomp @output;
+
+#print "Input array ".Dumper(\@output);
+#print "Array containts ".(scalar @output)." elements.\n";
+
+#print Dumper(\@output);
+
+# Теперь мы должны написать хитрый рекурсивный алгоритм. 
+#В алгоритм попадает массив. И дальше начинаются чудеса.
+#Мы всегда стараемся оставить 1-й элемент и это гарантирует нам упорядоченность вывода.
+
+# result array
+my @res = ();
+
+sub get_mctime
+{
+  return ((stat($_[0]))[9])." ".((stat($_[0]))[10]);
+}
+
+
+my %cache;
+
+# return [0..1, mtime, folder]
+sub __get_node
+{
+  my $nSnapshot = @output[$_[0]];
+
+  my $sDir = "/tmp/nilfs2_$nSnapshot";
+  if (! -d $sDir)
+  {
+    mkdir $sDir;
+  }
+
+  if (system("mount -t nilfs2 $sDevice -r -o cp=$nSnapshot $sDir")!=0)
+  {
+    print "Unable to mount snapshot $nSnapshot to $sDir\n";
+    exit 5;
+  }
+  my $sTestFileName = $sDir.$sRelFileName;
+
+  my @aRet = ();
+  if (-e $sTestFileName)
+  {
+    @aRet = (1, get_mctime($sTestFileName), -s $sTestFileName);
+  }
+  else
+  {
+    # Get real existing parent folder
+    my @aDir = split(/\//, $sRelFileName);
+
+    shift @aDir;
+
+    while (scalar @aDir)
+    {
+      pop @aDir;
+      if (-e $sDir.'/'.join('/', @aDir))
+      {
+        last;
+      }
+    }
+
+    if (0 == scalar @aDir)
+    {
+      @aRet = (0, get_mctime($sDir), '/');
+    }
+    else
+    {
+      my $sTmp = '/'.join('/', @aDir);
+      @aRet = (0, get_mctime($sDir.$sTmp), $sTmp);
+    }
+  }
+
+  if (system("umount $sDir")!=0)
+  {
+    print "Unable to unmount $sDir\n";
+    exit 6;
+  }
+
+  rmdir $sDir;
+  
+#  print Dumper(\@aRet);
+#  exit 0;
+  
+  return \@aRet;
+}
+
+sub get_node
+{
+  my $nEl = $_[0];
+
+  if (!exists($cache{$nEl}))
+  {
+    $cache{$nEl} = __get_node($nEl);
+  }
+
+  return $cache{$nEl};
+}
+
+sub exists_el
+{
+  return (@{get_node($_[0])})[0]==1;
+}
+
+# return 1 if have difference
+sub check_diff
+{
+  #print "check_diff $_[0] - $_[1]\n";
+  
+  my $sFirst = join ' ', @{get_node($_[0])};
+  my $sLast = join(' ', @{get_node($_[1])});
+  #print Dumper($_[0], get_node($_[0]), join('', get_node($_[0])), "$sFirst")."\n";
+  
+  ##print "cF: $sFirst\n";
+  #print "cF: $sLast\n";
+  return $sFirst ne $sLast;
+}
+
+sub find_border
+{
+
+  my $nFirst = $_[0];
+  my $nLast = $_[1];
+
+  #print "find_border $nFirst - $nLast\n";
+
+  if ($nLast - $nFirst == 1)
+  {
+    return $nLast;
+  }
+
+  my $nNew = int(0.5+($nLast+$nFirst)/2);
+
+  if (check_diff($nFirst, $nNew))
+  {
+    return find_border($nFirst, $nNew);
+  }
+  else
+  {
+    return find_border($nNew, $nLast);
+  }
+}
+
+sub define_borders
+{
+  #print "define_borders\n";
+  my $nFirst = $_[0];
+  my $nLast = $_[1];
+
+  if (exists_el($nFirst))
+  {
+    push @res, $nFirst;
+  }
+
+  while (($nFirst < $nLast) && check_diff($nFirst, $nLast))
+  {
+    $nFirst = find_border($nFirst, $nLast);
+
+    if (exists_el($nFirst))
+    {
+      push @res, $nFirst;
+    }
+    elsif (exists_el($nFirst-1) && !exists_el($nFirst))
+    {
+      push @res, $nFirst;
+    }
+  }
+}
+
+define_borders(0, $#output);
+
+# Print final results
+
+print "          CHECKPOINT        DATE     TIME     TYPE          SIZE  MODE\n";
+
+my $sStatus = '';
+
+for ($i = 0; $i <= $#res ; $i++)
+{
+  my $nRowNumber = $res[$i];
+  my @Info = @{$cache{$nRowNumber}};
+  my $nCheckpoint = $output[$nRowNumber];
+
+  my @ts = split ' ', $Info[1];
+  my $ts = ($ts[1] > $ts[0])?$ts[1]:$ts[0];
+
+  my $sDateTime = time2str("%Y-%m-%d %T", $ts);
+  my $sMode, my $sSize = '------------';
+
+  # File exists
+  if ($Info[0]==1)
+  {
+
+    if (0 == $i)
+    {
+      if ($nRowNumber == 0)
+      {
+        $sStatus = 'first';
+      }
+      else
+      {
+        $sStatus = 'created';
+      }
+    }
+    elsif (($sStatus eq 'first') ||($sStatus eq 'created') || ($sStatus eq 'changed'))
+    {
+      $sStatus = 'changed';
+    }
+    elsif ($sStatus eq 'deleted')
+    {
+      $sStatus = 'created';
+    }
+
+    $sSize = sprintf('%12s', $Info[2]);
+  }
+  else
+  {
+    $sStatus = 'deleted';
+  }
+
+  $sMode = exists($snapshot{$nCheckpoint})?'ss':'cp';
+
+  printf "%20d  %s  %7s  %s  %4s\n", $nCheckpoint, $sDateTime, $sStatus, $sSize, $sMode;
+}
+
+sub revert_snapshot
+{
+  my %output;
+  my %snapshot;
+
+  foreach (@output) {$output{$_}=1;}
+  foreach (@snapshot) {$snapshot{$_}=1;}
+
+  # Reverse snapshot to checkpoint
+  if (0 < scalar @snapshot)
+  {
+
+   #print "%ALL ".Dumper(\%output)."\n";
+   #print "%Snapshot ".Dumper(\%snapshot)."\n";
+
+    delete @output{keys %snapshot};
+
+    @output = keys %output;
+  }
+
+  #print "Desnapshot ".Dumper(\@output)."\n";
+
+  while ( my @chunk = splice(@output, 0, $nMaxArgs) )
+  {
+    while (256 == system("$cChcp cp ".join(' ', @chunk).' 2> /dev/null'))
+    {
+      system "sleep 0.5";
+    }
+  }
+}
+
+revert_snapshot();
