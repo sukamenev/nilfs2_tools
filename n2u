@@ -23,10 +23,11 @@ if (!exists($ARGV[0]))
 
 if ($ARGV[0] eq '-h' || $ARGV[0] eq '--help')
 {
-  print "This script return history of file item on NILFS2 filesystem.\n";
-  print "Copy script to /usr/local/bin.\n";
+  print "This script return history of file item on NILFS2 filesystem.\n\n";
+  print "INSTALL: Copy script to /usr/local/bin\n";
   print "USAGE: n2u filename.\n";
-  print "NOTE: You need root privilegies and installed nilfs2 utilities.\n";
+  print "NOTE: You need root privilegies and installed nilfs2 utilities.\n\n";
+  print "*** If you need additional features, you can sponsor them. PayPal: updates\@mail.ru ***\n";
   exit 0;
 }
 
