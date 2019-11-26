@@ -163,13 +163,65 @@ sub umount_cp
   rmdir $sDir;
 }
 
+# First - list cp, second arg - ss
+sub get_unsnapshot
+{
+  my %tmp;
+  #my %snapshot;
+  
+  my @aRes = @{$_[0]};
+  my @aSnap = @{$_[1]};
+  
+  foreach (@aRes) {$tmp{$_}=1;}
+  #foreach ($_[1]) {$snapshot{$_}=1;}
+
+  # Reverse snapshot to checkpoint
+  if (0 < scalar @aSnap)
+  {
+    delete @tmp{@aSnap};
+    
+    @aRes = keys %tmp;
+
+    return \@aRes;
+  }
+  return \@aRes;
+}
+
+sub unsnapshot
+{
+  my @unSnap = @{$_[0]};
+  
+  if (0 < scalar @unSnap)
+  {
+    while ( my @chunk = splice(@unSnap, 0, $nMaxArgs) )
+    {
+      while (256 == system("$cChcp cp ".join(' ', @chunk).' 2> /dev/null'))
+      {
+        system "sleep 0.5";
+      }
+    }
+  }
+}
+
+my @output = ();
+my @snapshot = ();
+
 ###########  DIFF  ##################
 
 sub command_diff
 {
   (my $nCp1, my $nCp2) = split(/:/, $option{'revision'});
   
-  system("$cChcp ss $nCp1 $nCp2");
+  @output = ($nCp1, $nCp2);
+  
+  my $cmd = "$cLscp -s|tail -n +1 | awk '{if (\$1==$nCp1 || \$1==$nCp2) {print \$1}}'";
+  @snapshot = `$cmd`;
+  chomp @snapshot;
+  
+  if (2 > scalar @snapshot)
+  {
+    system("$cChcp ss $nCp1 $nCp2");
+  }
   
   my $nSnapshot1 = $nCp1;
   my $sDir1 = get_cp_dir($nCp1);
@@ -184,12 +236,12 @@ sub command_diff
   my $sFile1 = $sDir1.$sRelFileName;
   my $sFile2 = $sDir2.$sRelFileName;
   
-  system("$cDiff -u $sFile1 $sFile2");
+  system("$cDiff -uNr $sFile1 $sFile2");
   
   umount_cp($sDir1);
   umount_cp($sDir2);
   
-  system("$cChcp cp $nCp1 $nCp2");
+  revert_snapshot();
 }
 
 ###########  LOG   ##################
@@ -198,9 +250,6 @@ my %cache;
 
 # result array
 my @res = ();
-
-my @output = ();
-my @snapshot = ();
 
 sub command_log
 {
@@ -312,10 +361,7 @@ sub command_log
     
     my $sFirst = join ' ', @{get_node($_[0])};
     my $sLast = join(' ', @{get_node($_[1])});
-    #print Dumper($_[0], get_node($_[0]), join('', get_node($_[0])), "$sFirst")."\n";
     
-    ##print "cF: $sFirst\n";
-    #print "cF: $sLast\n";
     return $sFirst ne $sLast;
   }
 
@@ -428,33 +474,11 @@ sub command_log
 
   sub revert_snapshot
   {
-    my %output;
-    my %snapshot;
-
-    foreach (@output) {$output{$_}=1;}
-    foreach (@snapshot) {$snapshot{$_}=1;}
-
-    # Reverse snapshot to checkpoint
-    if (0 < scalar @snapshot)
-    {
-
-     #print "%ALL ".Dumper(\%output)."\n";
-     #print "%Snapshot ".Dumper(\%snapshot)."\n";
-
-      delete @output{keys %snapshot};
-
-      @output = keys %output;
-    }
-
+    
+    my $unSnap = get_unsnapshot(\@output, \@snapshot);
+  
+    unsnapshot($unSnap);
     #print "Desnapshot ".Dumper(\@output)."\n\n";
-
-    while ( my @chunk = splice(@output, 0, $nMaxArgs) )
-    {
-      while (256 == system("$cChcp cp ".join(' ', @chunk).' 2> /dev/null'))
-      {
-        system "sleep 0.5";
-      }
-    }
   }
 
   revert_snapshot();
