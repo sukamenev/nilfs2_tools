@@ -18,7 +18,12 @@ $nMaxArgs = 50;
 
 use Getopt::Long qw(GetOptions);
 
-my $sUsage = "Usage: $0 log|diff [-cp begin:end] FILENAME";
+my $sUsage = <<KROK;
+
+Usage:
+  $0 log [-cp begin:end] FILENAME
+  $0 diff -cp cp1:cp2 FILENAME
+KROK
 
 sub print_usage
 {
@@ -32,6 +37,8 @@ sub no_args
 }
  
 my %option;
+my @aCp;
+my $sDevice = my $sMount = "";
 
 GetOptions(
     \%option,
@@ -43,7 +50,7 @@ if ($option{'help'})
 {
   print "This script return history of file item on NILFS2 filesystem.\n\n";
   print "INSTALL: Copy script to /usr/local/bin\n";
-  print $sUsage."\n";
+  print_usage();
   print "NOTE: You need root privilegies and installed nilfs2 utilities.\n\n";
   print "*** If you need additional features, you can sponsor them. PayPal: updates\@mail.ru ***\n";
   exit 0;
@@ -51,18 +58,25 @@ if ($option{'help'})
 
 $sCommand = $ARGV[0];
 
+if (!$sCommand)
+{
+  print "Error: no command given!\n";
+  print_usage();
+  exit 11;
+}
+
 if ($sCommand ne 'log' && $sCommand ne 'diff')
 {
   print "Error: unknown command: $sCommand!\n";
   print_usage();
-  exit 10;
+  exit 12;
 }
 
 if (!$ARGV[1])
 {
   print "Error: no filename!\n";
   print_usage();
-  exit 10;
+  exit 13;
 }
 
 if (!-s $cChcp || !-s $cLscp)
@@ -81,17 +95,14 @@ $sFileName = File::Spec->rel2abs( $ARGV[1] );
 
 $cmd = "cat /proc/mounts | awk '{if (\$3==\"nilfs2\") print length(\$2) \" \" \$2 \" \" \$1}' | sort -r -n | cut -d ' ' -f 2-3";
 
-@output = `$cmd`;
+my @output = `$cmd`;
 
 if (0 == scalar @output)
 {
   print "You don't have mounted NILFS2 filesystem!\n";
   exit 1;
 }
-
 chomp @output;
-
-my $sDevice = my $sMount = "";
 
 foreach (@output)
 {
@@ -129,7 +140,7 @@ elsif ($sCommand eq 'diff')
 
 sub get_cp_dir
 {
-  return "/tmp/nilfs2_".$_[0];
+  return '/tmp/nilfs2_'.$_[0];
 }
 
 sub mount_cp
@@ -190,7 +201,7 @@ sub get_unsnapshot
 sub unsnapshot
 {
   my @unSnap = @{$_[0]};
-  
+  #print "unSnapshot ".Dumper(\@unSnap)."\n\n";
   if (0 < scalar @unSnap)
   {
     while ( my @chunk = splice(@unSnap, 0, $nMaxArgs) )
@@ -203,18 +214,31 @@ sub unsnapshot
   }
 }
 
-my @output = ();
-my @snapshot = ();
+sub revert_snapshot
+{  
+  my $unSnap = get_unsnapshot($_[0], $_[1]);
+  
+  unsnapshot($unSnap);
+  #print "Desnapshot ".Dumper(\@output)."\n\n";
+}
 
 ###########  DIFF  ##################
 
 sub command_diff
 {
+  my @snapshot = ();
+
+  if (!$option{'revision'})
+  {
+    print "Option cp|revision|r is required!\n";
+    exit 14;
+  }
+  
   (my $nCp1, my $nCp2) = split(/:/, $option{'revision'});
   
-  @output = ($nCp1, $nCp2);
+  @aCp = ($nCp1, $nCp2);
   
-  my $cmd = "$cLscp -s|tail -n +1 | awk '{if (\$1==$nCp1 || \$1==$nCp2) {print \$1}}'";
+  my $cmd = "$cLscp -s $sDevice | tail -n +1 | awk '{if (\$1==$nCp1 || \$1==$nCp2) {print \$1}}'";
   @snapshot = `$cmd`;
   chomp @snapshot;
   
@@ -223,15 +247,13 @@ sub command_diff
     system("$cChcp ss $nCp1 $nCp2");
   }
   
-  my $nSnapshot1 = $nCp1;
   my $sDir1 = get_cp_dir($nCp1);
   
-  mount_cp($nSnapshot1, $sDir1);
+  mount_cp($nCp1, $sDir1);
   
-  my $nSnapshot2 = $nCp2;
   my $sDir2 = get_cp_dir($nCp2);
   
-  mount_cp($nSnapshot2, $sDir2);
+  mount_cp($nCp2, $sDir2);
   
   my $sFile1 = $sDir1.$sRelFileName;
   my $sFile2 = $sDir2.$sRelFileName;
@@ -241,7 +263,7 @@ sub command_diff
   umount_cp($sDir1);
   umount_cp($sDir2);
   
-  revert_snapshot();
+  revert_snapshot(\@aCp, \@snapshot);
 }
 
 ###########  LOG   ##################
@@ -251,172 +273,201 @@ my %cache;
 # result array
 my @res = ();
 
+sub get_mctime
+{
+  return ((stat($_[0]))[9])." ".((stat($_[0]))[10]);
+}
+
+# return [0..1, mtime, folder]
+sub __get_node
+{
+  my $nSnapshot = @aCp[$_[0]];
+  my $sDir = "/tmp/nilfs2_$nSnapshot";
+  
+  mount_cp($nSnapshot, $sDir);
+  
+  my $sTestFileName = $sDir.$sRelFileName;
+
+  my @aRet = ();
+  if (-e $sTestFileName)
+  {
+    @aRet = (1, get_mctime($sTestFileName), -s $sTestFileName);
+  }
+  else
+  {
+    # Get real existing parent folder
+    my @aDir = split(/\//, $sRelFileName);
+
+    shift @aDir;
+
+    while (scalar @aDir)
+    {
+      pop @aDir;
+      if (-e $sDir.'/'.join('/', @aDir))
+      {
+        last;
+      }
+    }
+
+    if (0 == scalar @aDir)
+    {
+      @aRet = (0, get_mctime($sDir), '/');
+    }
+    else
+    {
+      my $sTmp = '/'.join('/', @aDir);
+      @aRet = (0, get_mctime($sDir.$sTmp), $sTmp);
+    }
+  }
+  
+  umount_cp($sDir);
+  
+  return \@aRet;
+}
+
+sub get_node
+{
+  my $nEl = $_[0];
+
+  if (!exists($cache{$nEl}))
+  {
+    $cache{$nEl} = __get_node($nEl);
+  }
+
+  return $cache{$nEl};
+}
+
+sub exists_el
+{
+  return (@{get_node($_[0])})[0]==1;
+}
+
+# return 1 if have difference
+sub check_diff
+{
+  #print "check_diff $_[0] - $_[1]\n";
+  
+  my $sFirst = join ' ', @{get_node($_[0])};
+  my $sLast = join(' ', @{get_node($_[1])});
+  
+  return $sFirst ne $sLast;
+}
+
+sub find_border
+{
+
+  my $nFirst = $_[0];
+  my $nLast = $_[1];
+
+  #print "find_border $nFirst - $nLast\n";
+
+  if ($nLast - $nFirst == 1)
+  {
+    return $nLast;
+  }
+
+  my $nNew = int(0.5+($nLast+$nFirst)/2);
+
+  if (check_diff($nFirst, $nNew))
+  {
+    return find_border($nFirst, $nNew);
+  }
+  else
+  {
+    return find_border($nNew, $nLast);
+  }
+}
+
+sub define_borders
+{
+  #print "define_borders\n";
+  my $nFirst = $_[0];
+  my $nLast = $_[1];
+
+  if (exists_el($nFirst))
+  {
+    push @res, $nFirst;
+  }
+
+  while (($nFirst < $nLast) && check_diff($nFirst, $nLast))
+  {
+    $nFirst = find_border($nFirst, $nLast);
+
+    if (exists_el($nFirst))
+    {
+      push @res, $nFirst;
+    }
+    elsif (exists_el($nFirst-1) && !exists_el($nFirst))
+    {
+      push @res, $nFirst;
+    }
+  }
+}
+
+
 sub command_log
 {
+  my @aSnap = ();
+  
+  my $cmd;
+  my $nCp1, my $nCp2;
   # Get snapshot list
-  my $cmd = "$cLscp -s $sDevice | tail -n +2 | awk '{print \$1}'";
-  @snapshot = `$cmd`;
-  chomp @snapshot;
-
-  if (0 < scalar @snapshot)
+  if ($option{'revision'})
   {
-    print "Existing snapshots: ".join(' ', @snapshot)."\n";
+    ($nCp1, $nCp2) = split(/:/, $option{'revision'});
+    
+    $cmd = "$cLscp -s $sDevice | tail -n +2 | awk '{if ($nCp1 <= \$1 && \$1 <= $nCp2) {print \$1}}'";
+  }
+  else
+  {
+    $cmd = "$cLscp -s $sDevice | tail -n +2 | awk '{print \$1}'";  
+  }
+  
+  @aSnap = `$cmd`;
+  chomp @aSnap;
+
+  if (0 < scalar @aSnap)
+  {
+    #print Dumper(\@aSnap)."\n";
+    print "Existing snapshots: ".join(' ', @aSnap)."\n";
   }
 
   # Set all checkpoint to snapshot
-  # head -n -1 - Latest block is slow down work
-  $cmd = "$cLscp $sDevice | tail -n +2 | head -n -1 | awk '{print \$1}'| xargs -n$nMaxArgs $cChcp ss ";
+  if ($option{'revision'})
+  {
+    $cmd = "$cLscp $sDevice | tail -n +2 | awk '{if ($nCp1 <= \$1 && \$1 <= $nCp2) {print \$1}}'| xargs -n$nMaxArgs $cChcp ss ";
+  }
+  else
+  {
+    # head -n -1 - Latest block is slow down work
+    $cmd = "$cLscp $sDevice | tail -n +2 | head -n -1 | awk '{print \$1}'| xargs -n$nMaxArgs $cChcp ss ";
+  }
 
   `$cmd`;
 
   # Set all spapshot to checkpoint
   # lscp -s |  tail -n +2 | awk '{print $1}'| xargs -n50 chcp cp ";
 
-  # Get snapshot list
-  $cmd = "$cLscp -s $sDevice | tail -n +2 | awk '{print \$1}'";
+  # Get full non-break snapshot list
+  if ($option{'revision'})
+  {
+    $cmd = "$cLscp -s $sDevice | tail -n +2 | awk '{if ($nCp1 <= \$1 && \$1 <= $nCp2) {print \$1}}'";
+  }
+  else
+  {
+    $cmd = "$cLscp -s $sDevice | tail -n +2 | awk '{print \$1}'";
+  }
 
-  @output = `$cmd`;
+  @aCp = `$cmd`;
+  chomp @aCp;
 
-  if (0 == scalar @output)
+  if (0 == scalar @aCp)
   {
     print "You don't have checkpoint and snapshots!\n";
     exit 4;
   }
 
-  chomp @output;
-
-  sub get_mctime
-  {
-    return ((stat($_[0]))[9])." ".((stat($_[0]))[10]);
-  }
-
-  # return [0..1, mtime, folder]
-  sub __get_node
-  {
-    my $nSnapshot = @output[$_[0]];
-    my $sDir = "/tmp/nilfs2_$nSnapshot";
-    
-    mount_cp($nSnapshot, $sDir);
-    
-    my $sTestFileName = $sDir.$sRelFileName;
-
-    my @aRet = ();
-    if (-e $sTestFileName)
-    {
-      @aRet = (1, get_mctime($sTestFileName), -s $sTestFileName);
-    }
-    else
-    {
-      # Get real existing parent folder
-      my @aDir = split(/\//, $sRelFileName);
-
-      shift @aDir;
-
-      while (scalar @aDir)
-      {
-        pop @aDir;
-        if (-e $sDir.'/'.join('/', @aDir))
-        {
-          last;
-        }
-      }
-
-      if (0 == scalar @aDir)
-      {
-        @aRet = (0, get_mctime($sDir), '/');
-      }
-      else
-      {
-        my $sTmp = '/'.join('/', @aDir);
-        @aRet = (0, get_mctime($sDir.$sTmp), $sTmp);
-      }
-    }
-    
-    umount_cp($sDir);
-    
-    return \@aRet;
-  }
-
-  sub get_node
-  {
-    my $nEl = $_[0];
-
-    if (!exists($cache{$nEl}))
-    {
-      $cache{$nEl} = __get_node($nEl);
-    }
-
-    return $cache{$nEl};
-  }
-
-  sub exists_el
-  {
-    return (@{get_node($_[0])})[0]==1;
-  }
-
-  # return 1 if have difference
-  sub check_diff
-  {
-    #print "check_diff $_[0] - $_[1]\n";
-    
-    my $sFirst = join ' ', @{get_node($_[0])};
-    my $sLast = join(' ', @{get_node($_[1])});
-    
-    return $sFirst ne $sLast;
-  }
-
-  sub find_border
-  {
-
-    my $nFirst = $_[0];
-    my $nLast = $_[1];
-
-    #print "find_border $nFirst - $nLast\n";
-
-    if ($nLast - $nFirst == 1)
-    {
-      return $nLast;
-    }
-
-    my $nNew = int(0.5+($nLast+$nFirst)/2);
-
-    if (check_diff($nFirst, $nNew))
-    {
-      return find_border($nFirst, $nNew);
-    }
-    else
-    {
-      return find_border($nNew, $nLast);
-    }
-  }
-
-  sub define_borders
-  {
-    #print "define_borders\n";
-    my $nFirst = $_[0];
-    my $nLast = $_[1];
-
-    if (exists_el($nFirst))
-    {
-      push @res, $nFirst;
-    }
-
-    while (($nFirst < $nLast) && check_diff($nFirst, $nLast))
-    {
-      $nFirst = find_border($nFirst, $nLast);
-
-      if (exists_el($nFirst))
-      {
-        push @res, $nFirst;
-      }
-      elsif (exists_el($nFirst-1) && !exists_el($nFirst))
-      {
-        push @res, $nFirst;
-      }
-    }
-  }
-
-  define_borders(0, $#output);
+  define_borders(0, $#aCp);
 
   # Print final results
 
@@ -428,7 +479,7 @@ sub command_log
   {
     my $nRowNumber = $res[$i];
     my @Info = @{$cache{$nRowNumber}};
-    my $nCheckpoint = $output[$nRowNumber];
+    my $nCheckpoint = $aCp[$nRowNumber];
 
     my @ts = split ' ', $Info[1];
     my $ts = ($ts[1] > $ts[0])?$ts[1]:$ts[0];
@@ -472,14 +523,5 @@ sub command_log
     printf "%20d  %s  %7s  %s  %4s\n", $nCheckpoint, $sDateTime, $sStatus, $sSize, $sMode;
   }
 
-  sub revert_snapshot
-  {
-    
-    my $unSnap = get_unsnapshot(\@output, \@snapshot);
-  
-    unsnapshot($unSnap);
-    #print "Desnapshot ".Dumper(\@output)."\n\n";
-  }
-
-  revert_snapshot();
+  revert_snapshot(\@aCp, \@aSnap);
 }
