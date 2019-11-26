@@ -15,20 +15,56 @@ $cChcp = '/usr/bin/chcp';
 $cLscp = '/usr/bin/lscp';
 $nMaxArgs = 50;
 
-if (!exists($ARGV[0]))
+use Getopt::Long qw(GetOptions);
+
+my $sUsage = "Usage: $0 log|diff [-cp begin:end] FILENAME";
+
+sub print_usage
 {
-  print "Need file/dir name as argument!\n";
-  exit 7;
+  print $sUsage."\n";
 }
 
-if ($ARGV[0] eq '-h' || $ARGV[0] eq '--help')
+sub no_args
+{
+  print_usage();
+  exit 7;
+}
+ 
+my $bHelp;
+GetOptions(
+	'help|h'        => \$bHelp,
+) or no_args();
+
+if ($bHelp)
 {
   print "This script return history of file item on NILFS2 filesystem.\n\n";
   print "INSTALL: Copy script to /usr/local/bin\n";
-  print "USAGE: n2u filename.\n";
+  print $sUsage."\n";
   print "NOTE: You need root privilegies and installed nilfs2 utilities.\n\n";
   print "*** If you need additional features, you can sponsor them. PayPal: updates\@mail.ru ***\n";
   exit 0;
+}
+
+$sCommand = $ARGV[0];
+
+if ($sCommand ne 'log' && $sCommand ne 'diff')
+{
+  print "Error: unknown command: $sCommand!\n";
+  print_usage();
+  exit 10;
+}
+
+if (!$ARGV[1])
+{
+  print "Error: no filename!\n";
+  print_usage();
+  exit 10;
+}
+
+if (!-s $cChcp || !-s $cLscp)
+{
+  print "Please install nilfs2-utils packet!\n";
+  exit 9;
 }
 
 if ($> != 0)
@@ -37,7 +73,7 @@ if ($> != 0)
   exit 8;
 }
 
-$sFileName = File::Spec->rel2abs( $ARGV[0] );
+$sFileName = File::Spec->rel2abs( $ARGV[1] );
 
 $cmd = "cat /proc/mounts | awk '{if (\$3==\"nilfs2\") print length(\$2) \" \" \$2 \" \" \$1}' | sort -r -n | cut -d ' ' -f 2-3";
 
@@ -360,7 +396,7 @@ sub revert_snapshot
     @output = keys %output;
   }
 
-  #print "Desnapshot ".Dumper(\@output)."\n";
+  #print "Desnapshot ".Dumper(\@output)."\n\n";
 
   while ( my @chunk = splice(@output, 0, $nMaxArgs) )
   {
