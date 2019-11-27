@@ -22,6 +22,7 @@ my $sUsage = <<KROK;
 
 Usage:
   $0 log [-cp begin:end] FILENAME
+  $0 log [-cp {YEAR-MM-DD}:{YEAR-MM-DD}] FILENAME
   $0 diff -cp cp1:cp2 FILENAME
 KROK
 
@@ -65,7 +66,7 @@ if (!$sCommand)
   exit 11;
 }
 
-if ($sCommand ne 'log' && $sCommand ne 'diff')
+if ($sCommand ne 'log' && $sCommand ne 'diff' && $sCommand ne 'blame')
 {
   print "Error: unknown command: $sCommand!\n";
   print_usage();
@@ -129,7 +130,7 @@ if (length($sRelFileName)==1)
   exit 3;
 }
 
-if ($sCommand eq 'log')
+if ($sCommand eq 'log' || $sCommand eq 'blame')
 {
   command_log();
 }
@@ -222,6 +223,14 @@ sub revert_snapshot
   #print "Desnapshot ".Dumper(\@output)."\n\n";
 }
 
+sub print_diff
+{
+  my $sFile1 = $_[0];
+  my $sFile2 = $_[1];
+  
+  system("$cDiff -uNr $sFile1 $sFile2");
+}
+
 ###########  DIFF  ##################
 
 sub command_diff
@@ -258,7 +267,7 @@ sub command_diff
   my $sFile1 = $sDir1.$sRelFileName;
   my $sFile2 = $sDir2.$sRelFileName;
   
-  system("$cDiff -uNr $sFile1 $sFile2");
+  print_diff($sFile1, $sFile2);
   
   umount_cp($sDir1);
   umount_cp($sDir2);
@@ -404,10 +413,99 @@ sub define_borders
   }
 }
 
-sub command_log
+sub blame_print_head
 {
-  my @aSnap = ();
+  printf "===== Checkpoint %10d File status: %7s =====\n", $_[0], $_[1];
+}
+
+sub blame_first
+{
+  my $nCp2 = $aCp[$_[0]];
+  blame_print_head($nCp2, 'First');
   
+  my $sDir2 = get_cp_dir($nCp2);
+  mount_cp($nCp2, $sDir2);
+}
+
+sub blame_created
+{
+  my $nCp2 = $aCp[$_[0]];
+  blame_print_head($nCp2, 'Created');
+  
+  my $sDir2 = get_cp_dir($nCp2);
+  mount_cp($nCp2, $sDir2);
+}
+
+sub blame_changed
+{
+  my $nCp2 = $aCp[$_[0]];
+  my $nCp1 = $aCp[$_[1]];
+  blame_print_head($nCp2, 'Changed');
+  
+  my $sDir2 = get_cp_dir($nCp2);
+  mount_cp($nCp2, $sDir2);
+  
+  my $sDir1 = get_cp_dir($nCp1);
+  
+  my $sFile1 = $sDir1.$sRelFileName;
+  my $sFile2 = $sDir2.$sRelFileName;
+  
+  print_diff($sFile1, $sFile2);
+  
+  umount_cp($sDir1);
+}
+
+sub blame_deleted
+{
+  my $nCp2 = $aCp[$_[0]];
+  my $nCp1 = $aCp[$_[1]];
+  
+  blame_print_head($nCp2, 'Deleted');
+  
+  my $sDir1 = get_cp_dir($nCp1);
+  umount_cp($sDir1);
+}
+
+sub define_borders_blame
+{
+  #print "define_borders\n";
+  my $nFirst = $_[0];
+  my $nLast = $_[1];
+
+  if (exists_el($nFirst))
+  {
+    blame_first($nFirst);
+  }
+
+  my $nPrev;
+  while (($nFirst < $nLast) && check_diff($nFirst, $nLast))
+  {
+    $nPrev = $nFirst;
+    $nFirst = find_border($nFirst, $nLast);
+
+    if (exists_el($nFirst) && !exists_el($nPrev))
+    {
+      blame_created($nFirst);
+    }
+    elsif (exists_el($nFirst-1) && !exists_el($nFirst))
+    {
+      blame_deleted($nFirst, $nPrev);
+    }
+    else
+    {
+      blame_changed($nFirst, $nPrev);
+    }
+  }
+  
+  if (exists_el($nFirst))
+  {
+    my $sDir1 = get_cp_dir($aCp[$nFirst]);
+    umount_cp($sDir1);
+  }
+}
+
+sub command_log
+{ 
   my $cmd;
   my $nCp1, my $nCp2;
   
@@ -415,6 +513,8 @@ sub command_log
   my $sRevPattern = /(\d+:\d+)|($sDatePattern:$sDatePattern)/;
   
   my $bRev = 1, my $sDate1, my $sDate2;
+  
+  my @aSnap = ();
   
   my $sAwkArg;
   #my $sAwkNormArg = "'{print \$1}'";
@@ -491,15 +591,33 @@ sub command_log
     exit 4;
   }
 
-  define_borders(0, $#aCp);
+  if ($sCommand eq 'log')
+  {
+    define_borders(0, $#aCp);
+  
+    print_result_log(\@res, \@aSnap);  
+  }
+  else
+  {
+    define_borders_blame(0, $#aCp);
+  }
 
+  revert_snapshot(\@aCp, \@aSnap);
+}
+
+sub print_result_log
+{
+  my @res = @{$_[0]};
+  my @aSnap = @{$_[1]};
   # Print final results
-
   print "          CHECKPOINT        DATE     TIME     TYPE          SIZE  MODE\n";
 
   my $sStatus = '';
+  
+  my %hSnap;
+  foreach (@aSnap) {$hSnap{$_}=1;}
 
-  for ($i = 0; $i <= $#res ; $i++)
+  for (my $i = 0; $i <= $#res ; $i++)
   {
     my $nRowNumber = $res[$i];
     my @Info = @{$cache{$nRowNumber}};
@@ -541,11 +659,9 @@ sub command_log
     {
       $sStatus = 'deleted';
     }
-
-    $sMode = exists($snapshot{$nCheckpoint})?'ss':'cp';
+#print Dumper(\@aSnap);
+    $sMode = exists($hSnap{$nCheckpoint})?'ss':'cp';
 
     printf "%20d  %s  %7s  %s  %4s\n", $nCheckpoint, $sDateTime, $sStatus, $sSize, $sMode;
   }
-
-  revert_snapshot(\@aCp, \@aSnap);
 }
