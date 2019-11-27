@@ -404,24 +404,55 @@ sub define_borders
   }
 }
 
-
 sub command_log
 {
   my @aSnap = ();
   
   my $cmd;
   my $nCp1, my $nCp2;
+  
+  my $sDatePattern = /{\d{4}(-\d{2}(-\d{2})?)?}/;
+  my $sRevPattern = /(\d+:\d+)|($sDatePattern:$sDatePattern)/;
+  
+  my $bRev = 1, my $sDate1, my $sDate2;
+  
+  my $sAwkArg;
+  #my $sAwkNormArg = "'{print \$1}'";
+  #my $sAwkDateArg;
+  #my $sAwkCpArg = "'{if ($nCp1 <= \$1 && \$1 <= $nCp2) {print \$1}}'";
+  
   # Get snapshot list
   if ($option{'revision'})
   {
+    if ($option{'revision'} !~ $sRevPattern)
+    {
+      print "Error: in --revision argument!\n";
+      print_usage();
+      exit 15;
+    }
+    
     ($nCp1, $nCp2) = split(/:/, $option{'revision'});
     
-    $cmd = "$cLscp -s $sDevice | tail -n +2 | awk '{if ($nCp1 <= \$1 && \$1 <= $nCp2) {print \$1}}'";
+    if ('{' eq substr($nCp1, 0, 1))
+    {
+      $bRev = 0;
+      $sDate1 = substr($nCp1, 1, -1);
+      $sDate2 = substr($nCp2, 1, -1);
+      
+      $sAwkArg = "'{if (\"$sDate1\" <= \$2 && \$2 <= \"$sDate2\") {print \$1}}'";
+    }
+    else
+    {
+      $sAwkArg = "'{if ($nCp1 <= \$1 && \$1 <= $nCp2) {print \$1}}'";
+    }
   }
   else
   {
-    $cmd = "$cLscp -s $sDevice | tail -n +2 | awk '{print \$1}'";  
+    $sAwkArg = "'{print \$1}'";
   }
+  
+  # Get list existing snapshots
+  $cmd = "$cLscp -s $sDevice | tail -n +2 | awk ".$sAwkArg;
   
   @aSnap = `$cmd`;
   chomp @aSnap;
@@ -435,12 +466,12 @@ sub command_log
   # Set all checkpoint to snapshot
   if ($option{'revision'})
   {
-    $cmd = "$cLscp $sDevice | tail -n +2 | awk '{if ($nCp1 <= \$1 && \$1 <= $nCp2) {print \$1}}'| xargs -n$nMaxArgs $cChcp ss ";
+    $cmd = "$cLscp $sDevice | tail -n +2 | awk $sAwkArg| xargs -n$nMaxArgs $cChcp ss ";
   }
   else
   {
     # head -n -1 - Latest block is slow down work
-    $cmd = "$cLscp $sDevice | tail -n +2 | head -n -1 | awk '{print \$1}'| xargs -n$nMaxArgs $cChcp ss ";
+    $cmd = "$cLscp $sDevice | tail -n +2 | head -n -1 | awk $sAwkArg| xargs -n$nMaxArgs $cChcp ss ";
   }
 
   `$cmd`;
@@ -449,14 +480,7 @@ sub command_log
   # lscp -s |  tail -n +2 | awk '{print $1}'| xargs -n50 chcp cp ";
 
   # Get full non-break snapshot list
-  if ($option{'revision'})
-  {
-    $cmd = "$cLscp -s $sDevice | tail -n +2 | awk '{if ($nCp1 <= \$1 && \$1 <= $nCp2) {print \$1}}'";
-  }
-  else
-  {
-    $cmd = "$cLscp -s $sDevice | tail -n +2 | awk '{print \$1}'";
-  }
+  $cmd = "$cLscp -s $sDevice | tail -n +2 | awk $sAwkArg";
 
   @aCp = `$cmd`;
   chomp @aCp;
