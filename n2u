@@ -225,10 +225,9 @@ sub revert_snapshot
 
 sub print_diff
 {
-  my $sFile1 = $_[0];
-  my $sFile2 = $_[1];
+  my @args = ($cDiff, '-uNr', $_[0], $_[1]);
   
-  system("$cDiff -uNr $sFile1 $sFile2");
+  system(@args);
 }
 
 ###########  DIFF  ##################
