@@ -286,7 +286,10 @@ sub get_mctime
   return ((stat($_[0]))[9])." ".((stat($_[0]))[10]);
 }
 
-# return [0..1, mtime, folder]
+# return info about file in concrete checkpoint
+# [0..1, mtime, folder]
+# First element 0 - file not exists. In this case last element - existing deepest parent folder to unexisting file.
+# First element 1 - file exists. In this case last element - size of file.
 sub __get_node
 {
   my $nSnapshot = @aCp[$_[0]];
@@ -333,6 +336,8 @@ sub __get_node
   return \@aRet;
 }
 
+# Return info about required file in this checkpoint number.
+# [0, mtime, existing_parent_dir] or [1, mtime, size]
 sub get_node
 {
   my $nEl = $_[0];
@@ -350,7 +355,7 @@ sub exists_el
   return (@{get_node($_[0])})[0]==1;
 }
 
-# return 1 if have difference
+# return 1 if have difference between file in different snapshots
 sub check_diff
 {
   #print "check_diff $_[0] - $_[1]\n";
@@ -361,6 +366,8 @@ sub check_diff
   return $sFirst ne $sLast;
 }
 
+# Find exact second boundary.
+# Recursive function.
 sub find_border
 {
 
@@ -374,8 +381,10 @@ sub find_border
     return $nLast;
   }
 
+  # bisection
   my $nNew = int(0.5+($nLast+$nFirst)/2);
-
+ 
+  # return 1 if have difference between file in different snapshots
   if (check_diff($nFirst, $nNew))
   {
     return find_border($nFirst, $nNew);
@@ -604,6 +613,8 @@ sub command_log
   revert_snapshot(\@aCp, \@aSnap);
 }
 
+# First arg - array of borders (see __get_node return format)
+# Second arg - array of snapshot
 sub print_result_log
 {
   my @res = @{$_[0]};
