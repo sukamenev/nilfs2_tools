@@ -299,10 +299,10 @@ sub __get_node
   
   my $sTestFileName = $sDir.$sRelFileName;
 
-  my @aRet = ();
+  my $aRet;
   if (-e $sTestFileName)
   {
-    @aRet = [1, get_mctime($sTestFileName), -s $sTestFileName];
+    $aRet = [1, get_mctime($sTestFileName), -s $sTestFileName];
   }
   else
   {
@@ -322,18 +322,18 @@ sub __get_node
 
     if (0 == scalar @aDir)
     {
-      @aRet = [0, get_mctime($sDir), '/'];
+      $aRet = [0, get_mctime($sDir), '/'];
     }
     else
     {
       my $sTmp = '/'.join('/', @aDir);
-      @aRet = [0, get_mctime($sDir.$sTmp), $sTmp];
+      $aRet = [0, get_mctime($sDir.$sTmp), $sTmp];
     }
   }
   
   umount_cp($sDir);
   
-  return \@aRet;
+  return $aRet;
 }
 
 # Return info about required file in this checkpoint number.
