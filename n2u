@@ -322,12 +322,12 @@ sub __get_node
 
     if (0 == scalar @aDir)
     {
-      @aRet = (0, get_mctime($sDir), '/');
+      @aRet = [0, get_mctime($sDir), '/'];
     }
     else
     {
       my $sTmp = '/'.join('/', @aDir);
-      @aRet = (0, get_mctime($sDir.$sTmp), $sTmp);
+      @aRet = [0, get_mctime($sDir.$sTmp), $sTmp];
     }
   }
   
@@ -558,7 +558,7 @@ sub command_log
   {
     $sAwkArg = "'{print \$1}'";
   }
-  
+ /* 
   # Get list existing snapshots
   $cmd = "$cLscp -s $sDevice | tail -n +2 | awk ".$sAwkArg;
   
@@ -598,7 +598,7 @@ sub command_log
     print "You don't have checkpoint and snapshots!\n";
     exit 4;
   }
-
+*/
   if ($sCommand eq 'log')
   {
     define_borders(0, $#aCp);
