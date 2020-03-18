@@ -302,7 +302,7 @@ sub __get_node
   my @aRet = ();
   if (-e $sTestFileName)
   {
-    @aRet = (1, get_mctime($sTestFileName), -s $sTestFileName);
+    @aRet = [1, get_mctime($sTestFileName), -s $sTestFileName];
   }
   else
   {
