@@ -361,7 +361,7 @@ sub check_diff
   #print "check_diff $_[0] - $_[1]\n";
   
   my $sFirst = join ' ', @{get_node($_[0])};
-  my $sLast = join(' ', @{get_node($_[1])});
+  my $sLast  = join ' ', @{get_node($_[1])};
   
   return $sFirst ne $sLast;
 }
