@@ -558,7 +558,7 @@ sub command_log
   {
     $sAwkArg = "'{print \$1}'";
   }
- /* 
+ 
   # Get list existing snapshots
   $cmd = "$cLscp -s $sDevice | tail -n +2 | awk ".$sAwkArg;
   
