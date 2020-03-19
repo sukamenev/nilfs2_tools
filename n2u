@@ -598,7 +598,7 @@ sub command_log
     print "You don't have checkpoint and snapshots!\n";
     exit 4;
   }
-*/
+
   if ($sCommand eq 'log')
   {
     define_borders(0, $#aCp);
